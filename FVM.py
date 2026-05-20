@@ -18,7 +18,7 @@ def FVM(f, k):
     J=k.size
     h=1/J
     #Step 1) Approximate k on grid edges using harmonic averages
-    k_shifted=0.5*(f[1:]+f[:-1])#2./(1./f[1:]+1./f[:-1])
+    k_shifted=2./(1./k[1:]+1./k[:-1])#0.5*(f[1:]+f[:-1])
     #Step 2)Setup system matrix
     A_diag=np.concatenate([
         [2.*k[0]+k_shifted[0]],
@@ -49,5 +49,6 @@ def exact_solution(m):
     x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
     return x_vals-np.square(x_vals)
 
-m_vals=np.array([1000000, 2000000])#16*np.exp2(np.arange(12)).astype(int)
+#approximate_solution(100)
+m_vals=16*np.exp2(np.arange(12)).astype(int)
 error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
