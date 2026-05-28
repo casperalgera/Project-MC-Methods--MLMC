@@ -4,12 +4,15 @@ from scipy.optimize import brentq
 import scipy.integrate as integrate
 import scipy
 import error_analysis
+from tqdm import tqdm
 
 sigmasq = 1 #>= 1
 lamb = 1   #<= Diam(D) = 1
 precompute_threshold = 49 #How many eigenfunctions and -values of the KL-expansion we precompute.
 klcutoff = 0.99 #The fraction of the variance we require to be captured by the KL-expansion. Higher fraction warrants a higher precomput threshold. 
-
+alpha=2#Order of convergence of the Finite Volume Method
+error_proportionality_constant=1.#E(Q_L-Q) \approx error_proportionality_constant * M^-alpha
+eps=0.00001#Desired precision level
 '''
 We find the nth solution of the equation tan(omega) = (2lambdaomega)/(lambda^2omega^2 - 1) using the periodicity of tan.
 #The equation has been rewritten into a form more suitable for numerical root-finding
@@ -27,6 +30,10 @@ Define and normalise the eigenfunctions b_1D. We precompute the normalisation up
 normalisation = [integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=50)[0] for n in range(precompute_threshold + 1)]
 norm = lambda n: np.sqrt(normalisation[n]) if n <= precompute_threshold else np.sqrt(integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=50)[0])
 b_1D = lambda n, x: np.array([(np.sin(omega(n)*a) + lamb*omega(n)*np.cos(omega(n)*a)) / norm(n) for a in x])
+
+
+#Setup function for generating the coordinates of the grid points
+gen_grid = lambda N: np.linspace(0.5/N, 1.-0.5/N, N, True)
 
 def Truncated_KL_Expansion(x, theta, b):
     '''
@@ -113,6 +120,36 @@ def Compute_Q(grid, grid_size):
 
 f = lambda x: x*np.exp(-(x**2)/0.25) 
 k = lambda x: np.exp(Truncated_KL_Expansion(x, theta_1D, b_1D))
+
+def draw_Y_L_samples(M0, s, sample_num, L):
+    samples=np.empty(sample_num)
+    M_curr = int(M0*(s**L))
+    M_prev = int(M0*(s**(L-1)))
+    x_curr = gen_grid(M_curr)
+    x_prev = gen_grid(M_prev)
+    k_test=np.empty(sample_num)
+    for i in tqdm(range(sample_num), desc="Generating Y_L samples with new grid size " + str(M_curr) ,leave=False):
+        k_grid_curr = k(x_curr)[0]
+        k_grid_prev = k_grid_curr[::s]
+        k_test[i]=np.max(np.abs(k_grid_curr))
+        p_curr = FVM(f(x_curr), k_grid_curr)
+        p_prev = FVM(f(x_prev), k_grid_prev)
+        samples[i] = 2*M_curr*k_grid_curr[-1]*p_curr[-1] - 2*M_prev*k_grid_prev[-1]*p_prev[-1]
+
+    return samples
+
+def draw_Q_L_samples(M, sample_num):
+    '''
+    Draw sample_num samples on a grid of size M
+    '''
+    samples=np.empty(sample_num)
+    x_vals= gen_grid(M)
+    #Draw an initial number of samples
+    for i in tqdm(range(sample_num), desc="Generating Y_0=Q_0 samples",leave=False):
+        k_grid = k(x_vals)[0]
+        p = FVM(f(x_vals), k_grid)
+        samples[i] = 2*M*k_grid[-1]*p[-1]
+    return samples
 def MLMC(Nmin, M0, s):
     '''
     Nmin samples at L
@@ -120,34 +157,45 @@ def MLMC(Nmin, M0, s):
     s grid scaling
     '''
     converged = False
+    #First Monte Carlo level is different
     L = 0
-    Y = [np.empty(Nmin)]
-    M = M0*(s**L)
-    gen_grid = lambda N: np.linspace(0.5/N, 1.-0.5/N, N, True)
-    x_vals= gen_grid(M)
-    for i in range(Nmin):
-        k_grid = np.array([k(x) for x in x_vals])
-        p = FVM(f(x_vals), k_grid)
-        Y[0][i] = 2*M*k_grid[-1]*p[-1]
-    VY_L = np.var(Y[0])
-    const = Nmin/np.sqrt(VY_L)
-    N = np.array([np.ceil(const * np.sqrt(VY_L))])
+    M = M0*(s**L)#Number of grid points
+    Y = [draw_Q_L_samples(M, Nmin)]#Setup sample array
+    
+    VY_L = [np.var(Y[0])]#Estimate variance
+    #Setup array for proportionality constants for N
+    N_proportion=[np.sqrt(VY_L[0]/(s**L))]
     while not converged:
         L = L+1
-        Y.append([np.empty(Nmin)])
-        M_curr = M0*(s**L)
-        M_prev = M0*(s**L)
-        x_curr = gen_grid(M_curr)
-        x_prev = gen_grid(M_prev)
-        for i in range(Nmin):
-            k_grid_curr = np.array([k(x) for x in x_curr])
-            k_grid_prev = np.array([k(x) for x in x_prev])
-            p_curr = FVM(f(x_curr), k_grid_curr)
-            p_prev = FVM(f(x_prev), k_grid_prev)
-            Y[L][i] = 2*M*(k_grid_curr[-1]*p_curr[-1] - 2*M*k_grid_prev[-1]*p_prev[-1])
-        converged = True
-#MLMC(10, 2)
+        M = M0*(s**L)
+        #Add new array for storing samples and compute samples for the new MLMC level
+        Y.append(draw_Y_L_samples(M0, s, Nmin, L))        
+        #Estimate variance of new level
+        VY_L.append(np.var(Y[L]))
+        current_prop_const=np.sqrt(VY_L[L]/(s**L))
+        N_proportion.append(current_prop_const)#Add new propoportionality constant
+        #Compute how many samples are now needed
+        N_vals=np.ceil(np.array(N_proportion)/current_prop_const*Nmin).astype(int)
+        #Add extra samples for other levels
+        if Y[0].size<N_vals[0]:
+            draw_Q_L_samples(M0, N_vals[0]-Y[0].size)
+        for update_L in range(1, L):
+            if Y[update_L].size<N_vals[update_L]:
+                Y[update_L]=np.concatenate((Y[update_L], draw_Y_L_samples(M0, s, N_vals[update_L]-Y[update_L].size, update_L)))
+        #Test for convergence
+        var=np.sum(np.array(VY_L)/N_vals)#Estimator of variance of Q_MLMC 
+        print("Variance is: " + str(var))
+        print("err is " + str(error_proportionality_constant*M**(-alpha)))
+        if var+error_proportionality_constant*M**(-alpha)<eps:
+            converged = True
+    #Return MLMC estimate
+    result=0.
+    for l in range(L+1):
+         result+=np.average(Y[l])
+    return result
+MLMC(30, 16, 2)
 
+'''
 x_vals = np.linspace(-5, 5, 100)
 n_samples = 1
 plt.figure()
@@ -158,4 +206,4 @@ plt.xlabel('x')
 plt.ylabel('Z(x)')
 plt.title(f'{n_samples} samples from truncated KL expansion')
 plt.grid(True)
-plt.show()
+plt.show()'''
