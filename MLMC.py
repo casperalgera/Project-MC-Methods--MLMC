@@ -7,12 +7,12 @@ import error_analysis
 from tqdm import tqdm
 
 sigmasq = 1 #>= 1
-lamb = 1   #<= Diam(D) = 1
-precompute_threshold = 49 #How many eigenfunctions and -values of the KL-expansion we precompute.
+lamb = 0.3  #<= Diam(D) = 1
+precompute_threshold = 100 #How many eigenfunctions and -values of the KL-expansion we precompute.
 klcutoff = 0.99 #The fraction of the variance we require to be captured by the KL-expansion. Higher fraction warrants a higher precomput threshold. 
 alpha=2#Order of convergence of the Finite Volume Method
-error_proportionality_constant=1.#E(Q_L-Q) \approx error_proportionality_constant * M^-alpha
-eps=0.00001#Desired precision level
+error_proportionality_constant=0.0001#E(Q_L-Q) \approx error_proportionality_constant * M^-alpha
+eps=0.0001#Desired precision level
 '''
 We find the nth solution of the equation tan(omega) = (2lambdaomega)/(lambda^2omega^2 - 1) using the periodicity of tan.
 #The equation has been rewritten into a form more suitable for numerical root-finding
@@ -20,7 +20,7 @@ We find the nth solution of the equation tan(omega) = (2lambdaomega)/(lambda^2om
 #Using this omega we define a function theta_1D for the eigenvalues in the KL-expansion.
 '''
 g = lambda x: (lamb**2*x**2 - 1)*np.sin(x) - 2*lamb*x*np.cos(x)
-om = np.concatenate([[brentq(g, 0.01, np.pi - np.pi/4)], [brentq(g, n*np.pi - np.pi/4, n*np.pi + np.pi/2.5) for n in range(1, precompute_threshold + 1)]])
+om = np.concatenate([[brentq(g, 0.01, np.pi - np.pi/4)], [brentq(g, n*np.pi - np.pi/4, n*np.pi + np.pi/2) for n in range(1, precompute_threshold + 1)]])
 omega = lambda n: om[n] if n <= precompute_threshold else n*np.pi
 theta_1D = lambda n: (2*lamb) / (lamb**2 * omega(n)**2 + 1)
 
@@ -115,10 +115,6 @@ def exact_solution(m):
     x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
     return np.square(1-x_vals)
 
-#m_vals=16*np.exp2(np.arange(12)).astype(int)
-#error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
-
-
 # plt.hist([Truncated_KL_Expansion(-5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
 # plt.hist([Truncated_KL_Expansion(5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
 # plt.show()
@@ -162,8 +158,6 @@ def draw_Y_L_samples(M0, s, sample_num, L):
         p_curr = FVM(f(x_curr), k_grid_curr)
         p_prev = FVM(f(x_prev), k_grid_prev)
         samples[i] = 2*M_curr*k_grid_curr[-1]*p_curr[-1] - 2*M_prev*k_grid_prev[-1]*p_prev[-1]
-        if np.abs(samples[i])>0.002:
-            print("problem")
     return samples
 
 def draw_Q_L_samples(M, sample_num):
@@ -222,8 +216,8 @@ def MLMC(Nmin, M0, s):
     return (result, Y, N_vals)
 
 
-draw_Y_L_samples(16, 2, 1000, 2)
-#MLMC(30, 16, 2)
+#draw_Y_L_samples(16, 2, 1000, 2)
+MLMC(30, 16, 2)
 '''
 x_vals = np.linspace(-5, 5, 100)
 n_samples = 1
