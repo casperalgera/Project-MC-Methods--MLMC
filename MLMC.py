@@ -83,10 +83,12 @@ def FVM(f, k):
         [2.*k[-1]+k_shifted[-1]]
     ])
     A=scipy.sparse.diags((-k_shifted, A_diag, -k_shifted), [-1, 0, 1], [J, J])
-    p=scipy.sparse.linalg.spsolve(scipy.sparse.csc_array(A), f*(h**2))
+    RHS=f*(h**2)
+    RHS[0]+=2.*k[0]
+    p=scipy.sparse.linalg.spsolve(scipy.sparse.csc_array(A), RHS)
     return p
 
-
+#Convergence analysis for the Finite Volume Method
 def approximate_solution(m):
     '''
     Find the approximate solution to -d/dx(k dp/dx)=f
@@ -94,7 +96,7 @@ def approximate_solution(m):
     '''
     x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
     k=1.+x_vals
-    f=1.+4.*x_vals
+    f=-4.*x_vals
     return FVM(f, k)
 
 
@@ -104,14 +106,16 @@ def exact_solution(m):
     for k=1+x, p=x-x^2, f=1+4x
     '''
     x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
-    return x_vals-np.square(x_vals)
+    return np.square(1-x_vals)
 
-# approximate_solution(100)
+m_vals=16*np.exp2(np.arange(12)).astype(int)
+error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
+
+
 # plt.hist([Truncated_KL_Expansion(-5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
 # plt.hist([Truncated_KL_Expansion(5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
 # plt.show()
-# m_vals=16*np.exp2(np.arange(12)).astype(int)
-# error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
+
 def Compute_Q(grid, grid_size):
     k_grid = np.array([k(x) for x in grid])
     p = FVM(f(grid), k_grid)
@@ -178,7 +182,7 @@ def MLMC(Nmin, M0, s):
         N_vals=np.ceil(np.array(N_proportion)/current_prop_const*Nmin).astype(int)
         #Add extra samples for other levels
         if Y[0].size<N_vals[0]:
-            draw_Q_L_samples(M0, N_vals[0]-Y[0].size)
+            Y[0]=draw_Q_L_samples(M0, N_vals[0]-Y[0].size)
         for update_L in range(1, L):
             if Y[update_L].size<N_vals[update_L]:
                 Y[update_L]=np.concatenate((Y[update_L], draw_Y_L_samples(M0, s, N_vals[update_L]-Y[update_L].size, update_L)))
@@ -192,9 +196,9 @@ def MLMC(Nmin, M0, s):
     result=0.
     for l in range(L+1):
          result+=np.average(Y[l])
-    return result
-MLMC(30, 16, 2)
+    return (result, Y, N_vals)
 
+#MLMC(30, 16, 2)
 '''
 x_vals = np.linspace(-5, 5, 100)
 n_samples = 1
