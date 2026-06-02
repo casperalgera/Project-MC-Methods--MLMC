@@ -35,14 +35,14 @@ b_1D = lambda n, x: np.array([(np.sin(omega(n)*a) + lamb*omega(n)*np.cos(omega(n
 #Setup function for generating the coordinates of the grid points
 gen_grid = lambda N: np.linspace(0.5/N, 1.-0.5/N, N, True)
 
-def Truncated_KL_Expansion(x, theta, b):
+def Truncated_KL_Expansion(M_vals, theta, b):
     '''
     Sample from a Gaussian random field Z
-    using the truncated Karhunen-Loève expansion 
+    using the truncated Karhunen-Loève expansion on some grids of sizes M
     Parameters:
     --------------------
-    x: [float]
-        Point in space from which to sample the random field.
+    M_vals: [int]
+        The sizes of the grids on which k needs to be sampled
     theta: [function]
         Function returning the nth eigenvalue of the covariance operator
          with kernel C(x,y) =  sigma^2 exp(-||x-y||^2/lambda).
@@ -50,14 +50,21 @@ def Truncated_KL_Expansion(x, theta, b):
         Function returning the nth normalised eigenfunctions of the 
         covariance operator. 
     '''
+    if isinstance(M_vals, int):
+        M_vals_arr=[M_vals]
+    else:
+        M_vals_arr=M_vals
     theta_sum = 0
     m_KL = 0
     while theta_sum < klcutoff*sigmasq:
         theta_sum += theta(m_KL)
         m_KL += 1
     xi_n = np.random.normal(0,1, size= m_KL)
-    return np.sum([[np.sqrt(theta(i))*xi_n[i]*b(i, x)] for i in range(m_KL)], axis=0)
-
+    results=[]
+    for M in M_vals_arr:
+        x_vals=np.linspace(0.5/M, 1.-0.5/M, M, True)
+        results.append(np.sum([np.sqrt(theta(i))*xi_n[i]*b(i, x_vals) for i in range(m_KL)], axis=0))
+    return results
 
 def FVM(f, k):
     '''
@@ -108,8 +115,8 @@ def exact_solution(m):
     x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
     return np.square(1-x_vals)
 
-m_vals=16*np.exp2(np.arange(12)).astype(int)
-error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
+#m_vals=16*np.exp2(np.arange(12)).astype(int)
+#error_analysis.compare_to_exact_solution(approximate_solution, exact_solution, m_vals)
 
 
 # plt.hist([Truncated_KL_Expansion(-5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
@@ -123,7 +130,26 @@ def Compute_Q(grid, grid_size):
 
 
 f = lambda x: x*np.exp(-(x**2)/0.25) 
-k = lambda x: np.exp(Truncated_KL_Expansion(x, theta_1D, b_1D))
+
+def k(M_vals):
+    '''
+    Sample from the random field k and return its value on grids with grid sizes M_vals
+    Parameters:
+    --------------
+    M_vals: [int] or int
+        Grid sizes
+    Returns:
+    0, 1, ..., len(M_vals): The sample of k evaluated at grids with grid sizes M_vals[0], M_vals[1], ..., M_vals[len(M_vals)-1]
+    '''
+    if isinstance(M_vals, int):
+        M_vals_arr=[M_vals]
+    else:
+        M_vals_arr=M_vals
+    Z=Truncated_KL_Expansion(M_vals_arr, theta_1D, b_1D)
+    result=[]
+    for i in range(len(M_vals_arr)):#Cant use numpy instead of this loop, since the arrays are not the same shape
+        result.append(np.exp(Z[i]))
+    return result
 
 def draw_Y_L_samples(M0, s, sample_num, L):
     samples=np.empty(sample_num)
@@ -131,15 +157,13 @@ def draw_Y_L_samples(M0, s, sample_num, L):
     M_prev = int(M0*(s**(L-1)))
     x_curr = gen_grid(M_curr)
     x_prev = gen_grid(M_prev)
-    k_test=np.empty(sample_num)
     for i in tqdm(range(sample_num), desc="Generating Y_L samples with new grid size " + str(M_curr) ,leave=False):
-        k_grid_curr = k(x_curr)[0]
-        k_grid_prev = k_grid_curr[::s]
-        k_test[i]=np.max(np.abs(k_grid_curr))
+        (k_grid_curr, k_grid_prev) = k([M_curr, M_prev])
         p_curr = FVM(f(x_curr), k_grid_curr)
         p_prev = FVM(f(x_prev), k_grid_prev)
         samples[i] = 2*M_curr*k_grid_curr[-1]*p_curr[-1] - 2*M_prev*k_grid_prev[-1]*p_prev[-1]
-
+        if np.abs(samples[i])>0.002:
+            print("problem")
     return samples
 
 def draw_Q_L_samples(M, sample_num):
@@ -148,9 +172,8 @@ def draw_Q_L_samples(M, sample_num):
     '''
     samples=np.empty(sample_num)
     x_vals= gen_grid(M)
-    #Draw an initial number of samples
     for i in tqdm(range(sample_num), desc="Generating Y_0=Q_0 samples",leave=False):
-        k_grid = k(x_vals)[0]
+        k_grid = k(M)[0]
         p = FVM(f(x_vals), k_grid)
         samples[i] = 2*M*k_grid[-1]*p[-1]
     return samples
@@ -198,6 +221,8 @@ def MLMC(Nmin, M0, s):
          result+=np.average(Y[l])
     return (result, Y, N_vals)
 
+
+draw_Y_L_samples(16, 2, 1000, 2)
 #MLMC(30, 16, 2)
 '''
 x_vals = np.linspace(-5, 5, 100)
