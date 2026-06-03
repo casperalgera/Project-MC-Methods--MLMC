@@ -8,11 +8,10 @@ from tqdm import tqdm
 
 sigmasq = 1 #>= 1
 lamb = 0.3  #<= Diam(D) = 1
-precompute_threshold = 100 #How many eigenfunctions and -values of the KL-expansion we precompute.
+precompute_threshold = 99 #How many eigenfunctions and -values of the KL-expansion we precompute.
 klcutoff = 0.99 #The fraction of the variance we require to be captured by the KL-expansion. Higher fraction warrants a higher precomput threshold. 
 alpha=2#Order of convergence of the Finite Volume Method
-error_proportionality_constant=0.0001#E(Q_L-Q) \approx error_proportionality_constant * M^-alpha
-eps=0.0001#Desired precision level
+error_proportionality_constant=3.2#E(Q_L-Q) \approx error_proportionality_constant * M^-alpha
 '''
 We find the nth solution of the equation tan(omega) = (2lambdaomega)/(lambda^2omega^2 - 1) using the periodicity of tan.
 #The equation has been rewritten into a form more suitable for numerical root-finding
@@ -27,8 +26,8 @@ theta_1D = lambda n: (2*lamb) / (lamb**2 * omega(n)**2 + 1)
 '''
 Define and normalise the eigenfunctions b_1D. We precompute the normalisation up to the precompute threshold.
 '''
-normalisation = [integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=50)[0] for n in range(precompute_threshold + 1)]
-norm = lambda n: np.sqrt(normalisation[n]) if n <= precompute_threshold else np.sqrt(integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=50)[0])
+normalisation = [integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=100)[0] for n in range(precompute_threshold + 1)]
+norm = lambda n: np.sqrt(normalisation[n]) if n <= precompute_threshold else np.sqrt(integrate.quad(lambda t: (np.sin(omega(n)*t) + lamb*omega(n)*np.cos(omega(n)*t))**2, 0, 1, limit=100)[0])
 b_1D = lambda n, x: np.array([(np.sin(omega(n)*a) + lamb*omega(n)*np.cos(omega(n)*a)) / norm(n) for a in x])
 
 
@@ -62,7 +61,7 @@ def Truncated_KL_Expansion(M_vals, theta, b):
     xi_n = np.random.normal(0,1, size= m_KL)
     results=[]
     for M in M_vals_arr:
-        x_vals=np.linspace(0.5/M, 1.-0.5/M, M, True)
+        x_vals=gen_grid(M)
         results.append(np.sum([np.sqrt(theta(i))*xi_n[i]*b(i, x_vals) for i in range(m_KL)], axis=0))
     return results
 
@@ -101,7 +100,7 @@ def approximate_solution(m):
     Find the approximate solution to -d/dx(k dp/dx)=f
     for k=1+x, p=x-x^2, f=1+4x using the finite volume method
     '''
-    x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
+    x_vals=gen_grid(m)
     k=1.+x_vals
     f=-4.*x_vals
     return FVM(f, k)
@@ -112,7 +111,7 @@ def exact_solution(m):
     Find the exact solution to -d/dx(k dp/dx)=f
     for k=1+x, p=x-x^2, f=1+4x
     '''
-    x_vals=np.linspace(0.5/m, 1.-0.5/m, m, True)
+    x_vals=gen_grid(m)
     return np.square(1-x_vals)
 
 # plt.hist([Truncated_KL_Expansion(-5, theta_1D, b_1D) for _ in range(10000)], alpha=0.5)
@@ -166,16 +165,31 @@ def draw_Q_L_samples(M, sample_num):
     '''
     samples=np.empty(sample_num)
     x_vals= gen_grid(M)
-    for i in tqdm(range(sample_num), desc="Generating Y_0=Q_0 samples",leave=False):
+    for i in tqdm(range(sample_num), desc="Generating Q_L samples for M = " + str(M),leave=False):
         k_grid = k(M)[0]
         p = FVM(f(x_vals), k_grid)
         samples[i] = 2*M*k_grid[-1]*p[-1]
     return samples
-def MLMC(Nmin, M0, s):
+def MLMC(Nmin, M0, s, eps):
     '''
+    Estimate Q using a multilevel monte carlo method
+    Parameters:
+    -------------------
     Nmin samples at L
     M0 initial grid size
     s grid scaling
+    eps desired precision level
+    Returns:
+    0: float
+        The MLMC estimate for Q
+    1: [np.array([float])] 
+        Arrays contaning samples of Y_L=Q_L-Q_{L-1}
+    2: [int] 
+        number of samples used for each grid size
+    3: [float]
+        Errors after each iteration
+    4: [[int]]
+        Numbers of samples used for each grid size after each iteration (indexed [iteration, grid size])
     '''
     converged = False
     #First Monte Carlo level is different
@@ -183,6 +197,8 @@ def MLMC(Nmin, M0, s):
     M = M0*(s**L)#Number of grid points
     Y = [draw_Q_L_samples(M, Nmin)]#Setup sample array
     
+    error_list=[]#Store the error after each iteration, for plotting
+    prev_N_vals=[]#Store the N values used during each iteration(to compute computational cost later)
     VY_L = [np.var(Y[0])]#Estimate variance
     #Setup array for proportionality constants for N
     N_proportion=[np.sqrt(VY_L[0]/(s**L))]
@@ -197,6 +213,7 @@ def MLMC(Nmin, M0, s):
         N_proportion.append(current_prop_const)#Add new propoportionality constant
         #Compute how many samples are now needed
         N_vals=np.ceil(np.array(N_proportion)/current_prop_const*Nmin).astype(int)
+        prev_N_vals.append(N_vals.copy())
         #Add extra samples for other levels
         if Y[0].size<N_vals[0]:
             Y[0]=draw_Q_L_samples(M0, N_vals[0]-Y[0].size)
@@ -206,18 +223,22 @@ def MLMC(Nmin, M0, s):
         #Test for convergence
         var=np.sum(np.array(VY_L)/N_vals)#Estimator of variance of Q_MLMC 
         print("Variance is: " + str(var))
-        print("err is " + str(error_proportionality_constant*M**(-alpha)))
-        if var+error_proportionality_constant*M**(-alpha)<eps:
+        print("error due to FVM is " + str(error_proportionality_constant*M**(-alpha)))
+        
+        current_err=np.sqrt(var+np.square(error_proportionality_constant*M**(-alpha)))
+        print("Total error is " +str(current_err))
+        error_list.append(current_err)
+        if current_err<eps:
             converged = True
     #Return MLMC estimate
     result=0.
     for l in range(L+1):
          result+=np.average(Y[l])
-    return (result, Y, N_vals)
+    return (result, Y, N_vals, error_list, prev_N_vals)
 
 
 #draw_Y_L_samples(16, 2, 1000, 2)
-MLMC(30, 16, 2)
+#MLMC(30, 16, 2, 0.0001)
 '''
 x_vals = np.linspace(-5, 5, 100)
 n_samples = 1
